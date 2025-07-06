@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messenger</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0;
+            color: #333;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            flex: 1;
+        }
+        .chat-panel {
+            flex: 2;
+        }
+        input, button, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .logout-btn {
+            background: #dc3545;
+            padding: 8px 16px;
+            width: auto;
+        }
+        .logout-btn:hover {
+            background: #c82333;
+        }
+        .message {
+            background: #e9ecef;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+        }
+        .own-message {
+            background: #007bff;
+            color: white;
+            margin-left: 20%;
+        }
+        .own-message strong {
+            color: #e9ecef;
+        }
+        .chat-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .chat-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        .chat-item:hover {
+            background: #f8f9fa;
+        }
+        .messages {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .hidden {
+            display: none;
+        }
+        .error {
+            color: red;
+            margin: 5px 0;
+        }
+        .success {
+            color: green;
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>💬 Messenger</h1>
+        <div class="user-info">
+            <div id="user-details"></div>
+            <button class="logout-btn" onclick="logout()">Выйти</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Панель контактов -->
+        <div class="panel">
+            <h2>Контакты</h2>
+            <input type="number" id="contact-id" placeholder="ID пользователя">
+            <button onclick="addContact()">Добавить в контакты</button>
+            <button onclick="loadContacts()">Обновить контакты</button>
+            <div id="contacts-list"></div>
+        </div>
+
+        <!-- Панель чатов -->
+        <div class="panel chat-panel">
+            <h2>Чаты</h2>
+            <div>
+                <h3>Создать личный чат</h3>
+                <input type="number" id="private-chat-user" placeholder="ID пользователя">
+                <button onclick="createPrivateChat()">Создать чат</button>
+            </div>
+
+            <div>
+                <h3>Создать групповой чат</h3>
+                <input type="text" id="group-name" placeholder="Название группы">
+                <input type="text" id="group-members" placeholder="ID участников через запятую">
+                <button onclick="createGroupChat()">Создать группу</button>
+            </div>
+
+            <button onclick="loadChats()">Обновить чаты</button>
+            <div id="chats-list" class="chat-list"></div>
+        </div>
+    </div>
+
+    <!-- Панель сообщений -->
+    <div class="panel" id="messages-section">
+        <h2>Сообщения</h2>
+        <div id="current-chat"></div>
+        <div id="messages" class="messages"></div>
+        <textarea id="message-text" placeholder="Введите сообщение" onkeypress="handleKeyPress(event)"></textarea>
+        <button onclick="sendMessage()">Отправить</button>
+        <button onclick="loadMessages()">Обновить сообщения</button>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('token');
+        let currentUser = null;
+        let currentChatId = null;
+        let messageUpdateInterval = null;
+
+        // Проверяем авторизацию при загрузке
+        if (!token) {
+            window.location.href = '/login.html';
+        } else {
+            loadUserInfo();
+            loadContacts();
+            loadChats();
+        }
+
+        async function apiCall(url, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token && { 'Authorization': `Bearer ${token}` })
+                }
+            };
+
+            try {
+                const response = await fetch(url, { ...defaultOptions, ...options });
+                if (response.status === 401) {
+                    // Токен истек или недействителен
+                    localStorage.removeItem('token');
+                    window.location.href = '/login.html';
+                    return { success: false, data: { error: 'Unauthorized' } };
+                }
+                const data = await response.json();
+                return { success: response.ok, data };
+            } catch (error) {
+                return { success: false, data: { error: error.message } };
+            }
+        }
+
+        async function loadUserInfo() {
+            const result = await apiCall('/me');
+            if (result.success) {
+                currentUser = result.data.user;
+                document.getElementById('user-details').innerHTML =
+                    `<div><strong>ID:</strong> ${currentUser.id}</div>
+                     <div><strong>Имя:</strong> ${currentUser.username}</div>
+                     <div><strong>Email:</strong> ${currentUser.email}</div>`;
+            }
+        }
+
+        function logout() {
+            token = null;
+            localStorage.removeItem('token');
+
+            // Останавливаем обновление сообщений
+            if (messageUpdateInterval) {
+                clearInterval(messageUpdateInterval);
+                messageUpdateInterval = null;
+            }
+
+            window.location.href = '/login.html';
+        }
+
+        async function addContact() {
+            const contactId = document.getElementById('contact-id').value;
+
+            const result = await apiCall('/contacts', {
+                method: 'POST',
+                body: JSON.stringify({ contact_id: parseInt(contactId) })
+            });
+
+            if (result.success) {
+                alert('Контакт добавлен!');
+                loadContacts();
+            } else {
+                alert('Ошибка: ' + result.data.error);
+            }
+        }
+
+        async function loadContacts() {
+            const result = await apiCall('/contacts');
+
+            if (result.success) {
+                const contactsList = document.getElementById('contacts-list');
+                contactsList.innerHTML = result.data.contacts.map(contact =>
+                    `<div class="contact-item">${contact.username} (ID: ${contact.id})</div>`
+                ).join('');
+            }
+        }
+
+        async function createPrivateChat() {
+            const userId = document.getElementById('private-chat-user').value;
+
+            const result = await apiCall('/chat/private', {
+                method: 'POST',
+                body: JSON.stringify({ user_id_2: parseInt(userId) })
+            });
+
+            if (result.success) {
+                alert('Чат создан! ID: ' + result.data.chat.id);
+                loadChats();
+            } else {
+                alert('Ошибка: ' + result.data.error);
+            }
+        }
+
+        async function createGroupChat() {
+            const name = document.getElementById('group-name').value;
+            const members = document.getElementById('group-members').value
+                .split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+
+            const result = await apiCall('/chat/group', {
+                method: 'POST',
+                body: JSON.stringify({ name, member_ids: members })
+            });
+
+            if (result.success) {
+                alert('Группа создана! ID: ' + result.data.chat.id);
+                loadChats();
+            } else {
+                alert('Ошибка: ' + result.data.error);
+            }
+        }
+
+        async function loadChats() {
+            const result = await apiCall('/chats');
+
+            if (result.success) {
+                const chatsList = document.getElementById('chats-list');
+                chatsList.innerHTML = result.data.chats.map(chat =>
+                    `<div class="chat-item" onclick="selectChat(${chat.id})">
+                        ${chat.is_group ? '👥' : '👤'} ${chat.name || 'Личный чат'} (ID: ${chat.id})
+                    </div>`
+                ).join('');
+            }
+        }
+
+        function selectChat(chatId) {
+            currentChatId = chatId;
+            document.getElementById('current-chat').innerHTML = `<h3>Чат ID: ${chatId}</h3>`;
+
+            // Останавливаем предыдущий интервал
+            if (messageUpdateInterval) {
+                clearInterval(messageUpdateInterval);
+            }
+
+            // Загружаем сообщения и запускаем автоматическое обновление
+            loadMessages();
+            messageUpdateInterval = setInterval(loadMessages, 3000); // Обновляем каждые 3 секунды
+        }
+
+        async function sendMessage() {
+            if (!currentChatId) {
+                alert('Выберите чат!');
+                return;
+            }
+
+            const text = document.getElementById('message-text').value;
+            if (!text.trim()) {
+                alert('Введите текст сообщения!');
+                return;
+            }
+
+            const result = await apiCall('/message', {
+                method: 'POST',
+                body: JSON.stringify({ chat_id: currentChatId, text })
+            });
+
+            if (result.success) {
+                document.getElementById('message-text').value = '';
+                // Сразу обновляем сообщения после отправки
+                loadMessages();
+            } else {
+                alert('Ошибка: ' + result.data.error);
+            }
+        }
+
+        async function loadMessages() {
+            if (!currentChatId) return;
+
+            const result = await apiCall(`/messages?chat_id=${currentChatId}&limit=50`);
+
+            if (result.success) {
+                const messagesDiv = document.getElementById('messages');
+                messagesDiv.innerHTML = result.data.messages.reverse().map(message => {
+                    const isOwnMessage = currentUser && message.sender_id === currentUser.id;
+                    const messageClass = isOwnMessage ? 'message own-message' : 'message';
+                    return `<div class="${messageClass}">
+                        <strong>${isOwnMessage ? 'Вы' : 'Отправитель ID: ' + message.sender_id}</strong><br>
+                        ${message.text}<br>
+                        <small>${new Date(message.sent_at).toLocaleString()}</small>
+                    </div>`;
+                }).join('');
+
+                // Прокручиваем к последнему сообщению
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+    </script>
+</body>
+</html>

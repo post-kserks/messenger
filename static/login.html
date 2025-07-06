@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messenger - Авторизация</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .auth-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            width: 100%;
+            max-width: 400px;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+        }
+        .form-section {
+            margin-bottom: 30px;
+        }
+        .form-section h3 {
+            color: #555;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: 2px solid #e1e5e9;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background: #5a6fd8;
+        }
+        .divider {
+            text-align: center;
+            margin: 20px 0;
+            position: relative;
+        }
+        .divider::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #e1e5e9;
+        }
+        .divider span {
+            background: white;
+            padding: 0 15px;
+            color: #999;
+            font-size: 14px;
+        }
+        .error {
+            color: #e74c3c;
+            margin: 5px 0;
+            text-align: center;
+            font-size: 14px;
+        }
+        .success {
+            color: #27ae60;
+            margin: 5px 0;
+            text-align: center;
+            font-size: 14px;
+        }
+        .switch-form {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .switch-form button {
+            background: none;
+            color: #667eea;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: underline;
+            width: auto;
+            padding: 5px;
+        }
+        .switch-form button:hover {
+            background: none;
+            color: #5a6fd8;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="logo">
+            <h1>💬 Messenger</h1>
+        </div>
+
+        <!-- Форма регистрации -->
+        <div id="register-form">
+            <div class="form-section">
+                <h3>Регистрация</h3>
+                <input type="text" id="reg-username" placeholder="Имя пользователя">
+                <input type="email" id="reg-email" placeholder="Email">
+                <input type="password" id="reg-password" placeholder="Пароль">
+                <button onclick="register()">Зарегистрироваться</button>
+                <div id="reg-error" class="error"></div>
+                <div id="reg-success" class="success"></div>
+            </div>
+
+            <div class="divider">
+                <span>или</span>
+            </div>
+
+            <div class="switch-form">
+                <button onclick="showLogin()">Уже есть аккаунт? Войти</button>
+            </div>
+        </div>
+
+        <!-- Форма входа -->
+        <div id="login-form" style="display: none;">
+            <div class="form-section">
+                <h3>Вход в систему</h3>
+                <input type="text" id="login-username" placeholder="Имя пользователя или email">
+                <input type="password" id="login-password" placeholder="Пароль">
+                <button onclick="login()">Войти</button>
+                <div id="login-error" class="error"></div>
+            </div>
+
+            <div class="divider">
+                <span>или</span>
+            </div>
+
+            <div class="switch-form">
+                <button onclick="showRegister()">Нет аккаунта? Зарегистрироваться</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('token');
+
+        // Проверяем, если пользователь уже авторизован
+        if (token) {
+            window.location.href = '/';
+        }
+
+        async function apiCall(url, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token && { 'Authorization': `Bearer ${token}` })
+                }
+            };
+
+            try {
+                const response = await fetch(url, { ...defaultOptions, ...options });
+                const data = await response.json();
+                return { success: response.ok, data };
+            } catch (error) {
+                return { success: false, data: { error: error.message } };
+            }
+        }
+
+        async function register() {
+            const username = document.getElementById('reg-username').value;
+            const email = document.getElementById('reg-email').value;
+            const password = document.getElementById('reg-password').value;
+
+            // Очищаем предыдущие сообщения
+            document.getElementById('reg-error').textContent = '';
+            document.getElementById('reg-success').textContent = '';
+
+            if (!username || !email || !password) {
+                document.getElementById('reg-error').textContent = 'Заполните все поля';
+                return;
+            }
+
+            const result = await apiCall('/register', {
+                method: 'POST',
+                body: JSON.stringify({ username, email, password })
+            });
+
+            if (result.success) {
+                document.getElementById('reg-success').textContent = 'Регистрация успешна! Теперь войдите в систему.';
+                // Очищаем поля
+                document.getElementById('reg-username').value = '';
+                document.getElementById('reg-email').value = '';
+                document.getElementById('reg-password').value = '';
+            } else {
+                document.getElementById('reg-error').textContent = 'Ошибка: ' + result.data.error;
+            }
+        }
+
+        async function login() {
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+
+            // Очищаем предыдущие сообщения
+            document.getElementById('login-error').textContent = '';
+
+            if (!username || !password) {
+                document.getElementById('login-error').textContent = 'Заполните все поля';
+                return;
+            }
+
+            const result = await apiCall('/login', {
+                method: 'POST',
+                body: JSON.stringify({ email_or_username: username, password })
+            });
+
+            if (result.success) {
+                token = result.data.token;
+                localStorage.setItem('token', token);
+                window.location.href = '/'; // Перенаправляем на главную страницу
+            } else {
+                document.getElementById('login-error').textContent = 'Ошибка: ' + result.data.error;
+            }
+        }
+
+        function showLogin() {
+            document.getElementById('register-form').style.display = 'none';
+            document.getElementById('login-form').style.display = 'block';
+        }
+
+        function showRegister() {
+            document.getElementById('login-form').style.display = 'none';
+            document.getElementById('register-form').style.display = 'block';
+        }
+
+        // Обработка Enter для отправки форм
+        document.addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                if (document.getElementById('register-form').style.display !== 'none') {
+                    register();
+                } else {
+                    login();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
