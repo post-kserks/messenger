@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Вход</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            background: #f4f6fb;
+            min-height: 100vh;
+            margin: 0;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: #fff;
+            padding: 36px 32px 28px 32px;
+            border-radius: 14px;
+            box-shadow: 0 4px 32px rgba(80,120,200,0.10), 0 1.5px 6px rgba(0,0,0,0.04);
+            min-width: 320px;
+            max-width: 90vw;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            color: #4f8cff;
+        }
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #4f8cff, #6a7cff);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: white;
+            font-weight: bold;
+        }
+        .logo-text {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #4f8cff, #6a7cff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .login-container h2 {
+            margin-bottom: 18px;
+            color: #222c36;
+            font-weight: 600;
+        }
+        .login-container form {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .login-container input {
+            padding: 10px 12px;
+            border-radius: 7px;
+            border: 1px solid #d0d6e0;
+            font-size: 1em;
+            background: #f8fafc;
+            transition: border 0.2s;
+        }
+        .login-container input:focus {
+            border: 1.5px solid #4f8cff;
+            outline: none;
+            background: #fff;
+        }
+        .login-container button {
+            margin-top: 8px;
+            padding: 10px;
+            background: linear-gradient(90deg, #4f8cff 60%, #6a7cff 100%);
+            color: #fff;
+            border: none;
+            border-radius: 7px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(80,120,200,0.08);
+            transition: background 0.2s;
+        }
+        .login-container button:hover {
+            background: linear-gradient(90deg, #3a6be0 60%, #4f8cff 100%);
+        }
+        #loginError {
+            color: #e74c3c;
+            margin-top: 4px;
+            min-height: 18px;
+            text-align: center;
+        }
+        .login-container a {
+            margin-top: 12px;
+            color: #4f8cff;
+            text-decoration: none;
+            font-size: 0.98em;
+            transition: color 0.2s;
+        }
+        .login-container a:hover {
+            color: #2d3742;
+        }
+        @media (max-width: 500px) {
+            .login-container {
+                min-width: unset;
+                padding: 22px 8vw 18px 8vw;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <div class="logo-icon">💬</div>
+            <div class="logo-text">Биба</div>
+        </div>
+        <h2>Вход в мессенджер</h2>
+        <form id="loginForm">
+            <input type="email" id="email" placeholder="Email" required>
+            <input type="password" id="password" placeholder="Пароль" required>
+            <button type="submit">Войти</button>
+        </form>
+        <div id="loginError"></div>
+        <a href="/static/register.html">Нет аккаунта? Регистрация</a>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
