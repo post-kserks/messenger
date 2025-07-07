@@ -37,3 +37,11 @@ CREATE TABLE chat_reads (
     last_read TIMESTAMP,
     PRIMARY KEY (user_id, chat_id)
 );
+
+CREATE TABLE message_reactions (
+    message_id INTEGER,
+    user_id INTEGER,
+    emoji TEXT NOT NULL,
+    reacted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, user_id)
+);

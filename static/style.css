@@ -146,6 +146,40 @@ body {
 .msg.me .bubble {
   background: #e6f0ff;
 }
+
+/* Стили для временных сообщений */
+.msg.temp-message .bubble {
+  opacity: 0.8;
+  background: #f0f0f0;
+}
+
+.msg.temp-message.me .bubble {
+  background: #e0e8f0;
+}
+
+/* Стили для неудачных сообщений */
+.msg.failed-message .bubble {
+  background: #ffe6e6;
+  border: 1px solid #ffcccc;
+}
+
+.msg.failed-message.me .bubble {
+  background: #ffe6e6;
+  border: 1px solid #ffcccc;
+}
+
+/* Индикаторы статуса */
+.status-indicator {
+  margin-left: 8px;
+  font-size: 0.9em;
+  opacity: 0.7;
+}
+
+.error-indicator {
+  margin-left: 8px;
+  font-size: 0.9em;
+  color: #ff4444;
+}
 .msg .meta {
   font-size: 0.92em;
   color: #888;

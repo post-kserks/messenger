@@ -62,7 +62,7 @@ func Router(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
-	case r.URL.Path == "/api/search_users":
+	case r.URL.Path == "/api/search":
 		searchUsersHandler(w, r)
 	case r.URL.Path == "/api/upload":
 		uploadFileHandler(w, r)
@@ -303,36 +303,97 @@ func getChatsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(chats)
 }
 
-// Добавление контакта (POST)
+// Добавление контакта по никнейму (POST)
 func addContactHandler(w http.ResponseWriter, r *http.Request) {
+	// Проверяем авторизацию
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Нет токена авторизации, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	secret := os.Getenv("JWT_SECRET")
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Невалидный токен, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	currentUserID := int(claims["user_id"].(float64))
+
 	type reqT struct {
-		UserID    int `json:"user_id"`
-		ContactID int `json:"contact_id"`
+		Username string `json:"username"`
 	}
 	var req reqT
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == 0 || req.ContactID == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("Ошибка: Некорректные данные запроса, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
-	_, err := db.DB.Exec("INSERT OR IGNORE INTO contacts (user_id, contact_id) VALUES (?, ?)", req.UserID, req.ContactID)
+
+	// Находим пользователя по никнейму или username
+	var contactID int
+	err = db.DB.QueryRow("SELECT id FROM users WHERE (nickname = ? OR username = ?) AND id != ?", req.Username, req.Username, currentUserID).Scan(&contactID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		log.Printf("Ошибка: Пользователь с никнеймом/именем %s не найден, запрос: %s %s", req.Username, r.Method, r.URL.Path)
+		return
+	}
+
+	// Проверяем, не добавлен ли уже этот пользователь в контакты
+	var exists int
+	err = db.DB.QueryRow("SELECT 1 FROM contacts WHERE user_id = ? AND contact_id = ?", currentUserID, contactID).Scan(&exists)
+	if err == nil {
+		w.WriteHeader(http.StatusConflict)
+		log.Printf("Ошибка: Пользователь уже в контактах, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	// Добавляем в контакты
+	_, err = db.DB.Exec("INSERT INTO contacts (user_id, contact_id) VALUES (?, ?)", currentUserID, contactID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
+
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":    true,
+		"message":    "Контакт добавлен",
+		"contact_id": contactID,
+	})
 }
 
 // Получение списка контактов (GET)
 func getContactsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		log.Printf("Ошибка: Некорректный запрос, отсутствует параметр user_id, запрос: %s %s", r.Method, r.URL.Path)
+	// Проверяем авторизацию
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Нет токена авторизации, запрос: %s %s", r.Method, r.URL.Path)
 		return
 	}
-	rows, err := db.DB.Query(`SELECT u.id, u.username, u.email FROM users u JOIN contacts c ON u.id = c.contact_id WHERE c.user_id = ?`, userID)
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	secret := os.Getenv("JWT_SECRET")
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Невалидный токен, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	currentUserID := int(claims["user_id"].(float64))
+
+	rows, err := db.DB.Query(`SELECT u.id, u.username, u.email, u.nickname FROM users u JOIN contacts c ON u.id = c.contact_id WHERE c.user_id = ?`, currentUserID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
@@ -342,10 +403,10 @@ func getContactsHandler(w http.ResponseWriter, r *http.Request) {
 	var contacts []map[string]interface{}
 	for rows.Next() {
 		var id int
-		var username, email string
-		if err := rows.Scan(&id, &username, &email); err == nil {
+		var username, email, nickname string
+		if err := rows.Scan(&id, &username, &email, &nickname); err == nil {
 			contacts = append(contacts, map[string]interface{}{
-				"id": id, "username": username, "email": email,
+				"id": id, "username": username, "email": email, "nickname": nickname,
 			})
 		}
 	}
@@ -355,23 +416,47 @@ func getContactsHandler(w http.ResponseWriter, r *http.Request) {
 
 // Удаление контакта (DELETE)
 func deleteContactHandler(w http.ResponseWriter, r *http.Request) {
+	// Проверяем авторизацию
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Нет токена авторизации, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	secret := os.Getenv("JWT_SECRET")
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Невалидный токен, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	currentUserID := int(claims["user_id"].(float64))
+
 	type reqT struct {
-		UserID    int `json:"user_id"`
 		ContactID int `json:"contact_id"`
 	}
 	var req reqT
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == 0 || req.ContactID == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ContactID == 0 {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("Ошибка: Некорректные данные запроса, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
-	_, err := db.DB.Exec("DELETE FROM contacts WHERE user_id = ? AND contact_id = ?", req.UserID, req.ContactID)
+	_, err = db.DB.Exec("DELETE FROM contacts WHERE user_id = ? AND contact_id = ?", currentUserID, req.ContactID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Контакт удален",
+	})
 }
 
 // Получение информации о пользователе (GET)
@@ -403,15 +488,15 @@ func getUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		id = strconv.Itoa(int(uidFloat))
 	}
-	row := db.DB.QueryRow("SELECT id, username, email FROM users WHERE id = ?", id)
+	row := db.DB.QueryRow("SELECT id, username, email, nickname FROM users WHERE id = ?", id)
 	var uid int
-	var username, email string
-	if err := row.Scan(&uid, &username, &email); err != nil {
+	var username, email, nickname string
+	if err := row.Scan(&uid, &username, &email, &nickname); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id": uid, "username": username, "email": email,
+		"id": uid, "username": username, "email": email, "nickname": nickname,
 	})
 }
 
@@ -421,6 +506,7 @@ func updateUserHandler(w http.ResponseWriter, r *http.Request) {
 		ID       int    `json:"id"`
 		Username string `json:"username"`
 		Email    string `json:"email"`
+		Nickname string `json:"nickname"`
 		Password string `json:"password"`
 	}
 	var req reqT
@@ -429,6 +515,38 @@ func updateUserHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Ошибка: Некорректные данные запроса, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
+
+	// Валидация никнейма
+	if req.Nickname != "" {
+		if len(req.Nickname) < 3 || len(req.Nickname) > 32 {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "Никнейм должен быть от 3 до 32 символов",
+			})
+			return
+		}
+		// Проверка символов
+		for _, c := range req.Nickname {
+			if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '_' {
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error": "Никнейм может содержать только буквы, цифры и _",
+				})
+				return
+			}
+		}
+		// Проверка уникальности (исключая текущего пользователя)
+		var exists int
+		err := db.DB.QueryRow("SELECT 1 FROM users WHERE nickname = ? AND id != ?", req.Nickname, req.ID).Scan(&exists)
+		if err == nil {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": "Никнейм уже занят",
+			})
+			return
+		}
+	}
+
 	if req.Password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 		if err != nil {
@@ -436,14 +554,14 @@ func updateUserHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Ошибка: Не удалось зашифровать пароль, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 			return
 		}
-		_, err = db.DB.Exec("UPDATE users SET username=?, email=?, password=? WHERE id=?", req.Username, req.Email, string(hash), req.ID)
+		_, err = db.DB.Exec("UPDATE users SET username=?, email=?, nickname=?, password=? WHERE id=?", req.Username, req.Email, req.Nickname, string(hash), req.ID)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 			return
 		}
 	} else {
-		_, err := db.DB.Exec("UPDATE users SET username=?, email=? WHERE id=?", req.Username, req.Email, req.ID)
+		_, err := db.DB.Exec("UPDATE users SET username=?, email=?, nickname=? WHERE id=?", req.Username, req.Email, req.Nickname, req.ID)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
@@ -451,30 +569,71 @@ func updateUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Профиль обновлен",
+	})
 }
 
-// Поиск пользователей по username/email
+// Поиск пользователей по никнейму
 func searchUsersHandler(w http.ResponseWriter, r *http.Request) {
+	// Проверяем авторизацию
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Нет токена авторизации, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+	tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+	secret := os.Getenv("JWT_SECRET")
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, &claims, func(token *jwt.Token) (interface{}, error) {
+		return []byte(secret), nil
+	})
+	if err != nil || !token.Valid {
+		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("Ошибка: Невалидный токен, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	currentUserID := int(claims["user_id"].(float64))
+
 	q := r.URL.Query().Get("q")
 	if q == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("Ошибка: Некорректный запрос, отсутствует параметр q, запрос: %s %s", r.Method, r.URL.Path)
 		return
 	}
-	rows, err := db.DB.Query(`SELECT id, username, email FROM users WHERE username LIKE ? OR email LIKE ? LIMIT 20`, "%"+q+"%", "%"+q+"%")
+
+	// Ищем пользователей по никнейму или username, исключая текущего пользователя
+	rows, err := db.DB.Query(`
+		SELECT u.id, u.username, u.email, u.nickname,
+		       CASE WHEN c.contact_id IS NOT NULL THEN 1 ELSE 0 END as is_contact
+		FROM users u
+		LEFT JOIN contacts c ON u.id = c.contact_id AND c.user_id = ?
+		WHERE (u.nickname LIKE ? OR u.username LIKE ?) AND u.id != ?
+		LIMIT 20
+	`, currentUserID, "%"+q+"%", "%"+q+"%", currentUserID)
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
 	defer rows.Close()
+
 	var users []map[string]interface{}
 	for rows.Next() {
 		var id int
-		var username, email string
-		if err := rows.Scan(&id, &username, &email); err == nil {
+		var username, email, nickname string
+		var isContact int
+		if err := rows.Scan(&id, &username, &email, &nickname, &isContact); err == nil {
 			users = append(users, map[string]interface{}{
-				"id": id, "username": username, "email": email,
+				"id":         id,
+				"username":   username,
+				"email":      email,
+				"nickname":   nickname,
+				"is_contact": isContact == 1,
 			})
 		}
 	}

@@ -115,6 +115,7 @@
         <div id="profileInfo"></div>
         <form id="profileForm">
             <input type="text" id="profileUsername" placeholder="Имя пользователя" required><br>
+            <input type="text" id="profileNickname" placeholder="Никнейм (3-32 символа, только буквы/цифры/_)" required><br>
             <input type="email" id="profileEmail" placeholder="Email" required><br>
             <input type="password" id="profilePassword" placeholder="Новый пароль (не менять — оставить пустым)"><br>
             <button type="submit">Сохранить</button>
@@ -139,11 +140,18 @@
     <div class="modal-content">
         <span class="close" id="closeContacts">×</span>
         <h3>Контакты</h3>
-        <ul id="contactsList"></ul>
-        <form id="addContactForm">
-            <input type="number" id="addContactId" placeholder="ID пользователя" required>
-            <button type="submit">Добавить контакт</button>
-        </form>
+        <div style="margin-bottom: 20px;">
+            <h4>Добавить контакт</h4>
+            <form id="searchUserForm" style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <input type="text" id="searchUsername" placeholder="Введите никнейм или имя пользователя" style="flex: 1;">
+                <button type="submit">Добавить</button>
+            </form>
+            <div id="searchResults" style="margin-top: 10px;"></div>
+        </div>
+        <div style="border-top: 1px solid #eee; padding-top: 20px;">
+            <h4>Мои контакты</h4>
+            <ul id="contactsList"></ul>
+        </div>
     </div>
 </div>
 <script src="/static/app.js"></script>
