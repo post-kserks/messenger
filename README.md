@@ -330,38 +330,6 @@ GET /api/messages?chat_id=1
 Authorization: Bearer <jwt_token>
 ```
 
-### Контакты
-
-#### Добавление контакта
-```
-POST /api/contacts
-Authorization: Bearer <jwt_token>
-Content-Type: application/json
-
-{
-  "user_id": 1,
-  "contact_id": 2
-}
-```
-
-#### Получение списка контактов
-```
-GET /api/contacts
-Authorization: Bearer <jwt_token>
-```
-
-#### Удаление контакта
-```
-DELETE /api/contacts
-Authorization: Bearer <jwt_token>
-Content-Type: application/json
-
-{
-  "user_id": 1,
-  "contact_id": 2
-}
-```
-
 ### Пользователи
 
 #### Получение информации о пользователе
@@ -386,7 +354,7 @@ Content-Type: application/json
 
 #### Поиск пользователей
 ```
-GET /api/search_users?q=username
+GET /api/search?q=username
 Authorization: Bearer <jwt_token>
 ```
 
@@ -399,6 +367,64 @@ Authorization: Bearer <jwt_token>
 Content-Type: multipart/form-data
 
 file: <файл>
+chat_id: <id чата>
+```
+
+### Непрочитанные сообщения
+
+#### Получение количества непрочитанных сообщений по чатам
+```
+GET /api/unread?user_id=1
+Authorization: Bearer <jwt_token>
+```
+Ответ:
+```json
+[
+  {"chat_id": 1, "count": 3},
+  {"chat_id": 2, "count": 0}
+]
+```
+
+#### Отметить сообщения в чате как прочитанные
+```
+POST /api/mark_read
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+{
+  "user_id": 1,
+  "chat_id": 2
+}
+```
+
+### Контакты
+
+#### Добавление контакта по username или nickname
+```
+POST /api/contacts
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+{
+  "username": "nickname_or_username"
+}
+```
+
+#### Получение списка контактов
+```
+GET /api/contacts
+Authorization: Bearer <jwt_token>
+```
+
+#### Удаление контакта
+```
+DELETE /api/contacts
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+{
+  "contact_id": 2
+}
 ```
 
 ### Реакции
