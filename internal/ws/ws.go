@@ -124,12 +124,20 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 			SendToChatMembers(in.ChatID, outMsg)
 			continue
 		}
-		if in.Type == "reaction" && in.MessageID > 0 && in.Emoji != "" {
-			// Сохраняем реакцию
-			_, err = db.DB.Exec(`INSERT INTO message_reactions (message_id, user_id, emoji, reacted_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-				ON CONFLICT(message_id, user_id) DO UPDATE SET emoji=excluded.emoji, reacted_at=CURRENT_TIMESTAMP`, in.MessageID, int(userID), in.Emoji)
-			if err != nil {
-				log.Println("Ошибка сохранения реакции:", err)
+		if in.Type == "reaction" && in.MessageID > 0 {
+			if in.Emoji == "" {
+				// Удаляем реакцию
+				_, err = db.DB.Exec(`DELETE FROM message_reactions WHERE message_id = ? AND user_id = ?`, in.MessageID, int(userID))
+				if err != nil {
+					log.Println("Ошибка удаления реакции:", err)
+				}
+			} else {
+				// Сохраняем/обновляем реакцию
+				_, err = db.DB.Exec(`INSERT INTO message_reactions (message_id, user_id, emoji, reacted_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+					ON CONFLICT(message_id, user_id) DO UPDATE SET emoji=excluded.emoji, reacted_at=CURRENT_TIMESTAMP`, in.MessageID, int(userID), in.Emoji)
+				if err != nil {
+					log.Println("Ошибка сохранения реакции:", err)
+				}
 			}
 			// Получаем все реакции к сообщению
 			rows, _ := db.DB.Query(`SELECT user_id, emoji FROM message_reactions WHERE message_id = ?`, in.MessageID)

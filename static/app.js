@@ -54,7 +54,7 @@ function initEventHandlers() {
 
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
-        logoutBtn.addEventListener('click', logout);
+        logoutBtn.addEventListener('click', showLogoutConfirm);
     }
 
     const profileBtn = document.getElementById('profileBtn');
@@ -308,41 +308,86 @@ async function loadMessages(chatId) {
     }
 }
 
-// Отображение сообщений
+// --- НАБОР ЭМОДЗИ ДЛЯ РЕАКЦИЙ ---
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '👎'];
+
+// --- КОНТЕКСТНОЕ МЕНЮ ДЛЯ РЕАКЦИЙ ---
+let reactionMenu = null;
+function showReactionMenu(x, y, messageId) {
+    if (reactionMenu) reactionMenu.remove();
+    reactionMenu = document.createElement('div');
+    reactionMenu.className = 'reaction-context-menu';
+    REACTION_EMOJIS.forEach(emoji => {
+        const btn = document.createElement('button');
+        btn.className = 'reaction-menu-btn';
+        btn.type = 'button';
+        btn.textContent = emoji;
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const msg = currentMessages.find(m => m.id === messageId);
+            if (msg) {
+                if (!msg.reactions) msg.reactions = [];
+                // Удаляем старую реакцию пользователя, если была
+                msg.reactions = msg.reactions.filter(r => r.user_id !== currentUser.id);
+                msg.reactions.push({ user_id: currentUser.id, emoji });
+                renderMessages();
+                // Отправляем реакцию на сервер (всегда, даже если локально обновили)
+                sendReaction(messageId, emoji);
+            } else {
+                sendReaction(messageId, emoji);
+            }
+            hideReactionMenu();
+        };
+        reactionMenu.appendChild(btn);
+    });
+    document.body.appendChild(reactionMenu);
+    const menuRect = reactionMenu.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + menuRect.width > window.innerWidth) {
+        left = x - menuRect.width;
+        if (left < 0) left = 0;
+    }
+    if (top + menuRect.height > window.innerHeight) {
+        top = window.innerHeight - menuRect.height;
+        if (top < 0) top = 0;
+    }
+    reactionMenu.style.left = left + 'px';
+    reactionMenu.style.top = top + 'px';
+    setTimeout(() => {
+        document.addEventListener('click', hideReactionMenu, { once: true });
+    }, 0);
+}
+function hideReactionMenu() {
+    if (reactionMenu) {
+        reactionMenu.remove();
+        reactionMenu = null;
+    }
+}
+
+// --- ОТОБРАЖЕНИЕ СООБЩЕНИЙ С РЕАКЦИЯМИ ---
 function renderMessages() {
     const messagesDiv = document.getElementById('messages');
     if (!messagesDiv) return;
     messagesDiv.innerHTML = '';
-    // Проверяем, что currentMessages - это массив
     if (!currentMessages || !Array.isArray(currentMessages)) {
         currentMessages = [];
     }
-    // Сортируем по времени
     currentMessages.sort((a, b) => new Date(a.sent_at) - new Date(b.sent_at));
     currentMessages.forEach(msg => {
         const msgDiv = document.createElement('div');
         let className = `msg ${Number(msg.sender_id) === Number(currentUser.id) ? 'me' : ''}`;
-
-        // Добавляем стили для временных и неудачных сообщений
-        if (msg.isTemp) {
-            className += ' temp-message';
-        }
-        if (msg.failed) {
-            className += ' failed-message';
-        }
-
+        if (msg.isTemp) className += ' temp-message';
+        if (msg.failed) className += ' failed-message';
         msgDiv.className = className;
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
-
         if (msg.type === 'file' || (msg.text && msg.text.startsWith('[file]'))) {
             const fileUrl = msg.file_url || (msg.text ? msg.text.replace('[file]', '') : '');
             bubble.innerHTML = `<a href="${fileUrl}" target="_blank">📎 ${msg.file_name || 'Файл'}</a>`;
         } else {
             bubble.textContent = msg.text;
         }
-
-        // Добавляем индикатор статуса для временных сообщений
         if (msg.isTemp && !msg.failed) {
             const status = document.createElement('span');
             status.className = 'status-indicator';
@@ -350,8 +395,6 @@ function renderMessages() {
             status.title = 'Отправляется...';
             bubble.appendChild(status);
         }
-
-        // Добавляем индикатор ошибки для неудачных сообщений
         if (msg.failed) {
             const error = document.createElement('span');
             error.className = 'error-indicator';
@@ -359,21 +402,139 @@ function renderMessages() {
             error.title = 'Ошибка отправки';
             bubble.appendChild(error);
         }
-
+        // --- РЕАКЦИИ (только отображение) ---
+        const reactionsDiv = document.createElement('div');
+        reactionsDiv.className = 'reactions-bar';
+        const reactionsMap = {};
+        if (msg.reactions && Array.isArray(msg.reactions)) {
+            msg.reactions.forEach(r => {
+                if (!reactionsMap[r.emoji]) reactionsMap[r.emoji] = [];
+                reactionsMap[r.emoji].push(r.user_id);
+            });
+        }
+        Object.keys(reactionsMap).forEach(emoji => {
+            const btn = document.createElement('span');
+            btn.className = 'reaction-btn';
+            btn.textContent = emoji + (reactionsMap[emoji].length > 1 ? ` ${reactionsMap[emoji].length}` : '');
+            if (reactionsMap[emoji].includes(currentUser.id)) {
+                btn.classList.add('reacted');
+                btn.style.cursor = 'pointer';
+                btn.onclick = (e) => {
+                    // Снять свою реакцию
+                    const msgObj = currentMessages.find(m => m.id === msg.id);
+                    if (msgObj) {
+                        msgObj.reactions = msgObj.reactions.filter(r => !(r.user_id === currentUser.id && r.emoji === emoji));
+                        renderMessages();
+                        // Отправить на сервер снятие реакции
+                        sendReaction(msg.id, "");
+                    }
+                };
+            }
+            reactionsDiv.appendChild(btn);
+        });
+        if (Object.keys(reactionsMap).length > 0) bubble.appendChild(reactionsDiv);
+        // ---
         const meta = document.createElement('div');
         meta.className = 'meta';
         let timeText = new Date(msg.sent_at).toLocaleString();
-        if (msg.isTemp && !msg.failed) {
-            timeText += ' (отправляется...)';
-        } else if (msg.failed) {
-            timeText += ' (ошибка)';
-        }
+        if (msg.isTemp && !msg.failed) timeText += ' (отправляется...)';
+        else if (msg.failed) timeText += ' (ошибка)';
         meta.innerHTML = `<span class="username">${msg.username}</span> • ${timeText}`;
         msgDiv.appendChild(bubble);
         msgDiv.appendChild(meta);
+        // --- обработчик контекстного меню ---
+        bubble.oncontextmenu = (e) => {
+            e.preventDefault();
+            showReactionMenu(e.clientX, e.clientY, msg.id);
+        };
         messagesDiv.appendChild(msgDiv);
     });
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// --- ОТПРАВКА РЕАКЦИИ ---
+function sendReaction(messageId, emoji) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({
+        type: 'reaction',
+        message_id: messageId,
+        chat_id: currentChat.id,
+        emoji: emoji
+    }));
+}
+
+// --- ОБРАБОТКА ВХОДЯЩИХ РЕАКЦИЙ ---
+function handleWebSocketMessage(data) {
+    if (data.type === 'reaction' && data.message_id) {
+        // Найти сообщение и обновить его реакции
+        const msg = currentMessages.find(m => m.id === data.message_id);
+        if (msg) {
+            msg.reactions = data.reactions;
+            renderMessages();
+        }
+        return;
+    }
+    // Унифицируем структуру для файлов и сообщений
+    let msg = {
+        id: data.id,
+        chat_id: data.chat_id,
+        sender_id: data.sender_id,
+        username: data.username,
+        sent_at: data.sent_at,
+        type: data.type === 'new_file' || data.type === 'file' ? 'file' : undefined,
+        text: data.text,
+        file_url: data.file_url,
+        file_name: data.file_name,
+        reactions: data.reactions // <-- добавляем реакции, если есть
+    };
+    if (msg.type === 'file' && !msg.file_url && msg.text && msg.text.startsWith('[file]')) {
+        msg.file_url = msg.text.replace('[file]', '');
+    }
+    if (msg.type === 'file' && !msg.file_name) {
+        msg.file_name = 'Файл';
+    }
+    if (!msg.username && currentUser && Number(msg.sender_id) === Number(currentUser.id)) {
+        msg.username = currentUser.username;
+    }
+
+    // Если сообщение для текущего открытого чата
+    if (currentChat && data.chat_id === currentChat.id) {
+        // Проверяем, есть ли временное сообщение с таким же текстом от того же пользователя
+        const existingIndex = currentMessages.findIndex(m =>
+            m.isTemp &&
+            m.sender_id === msg.sender_id &&
+            m.text === msg.text &&
+            new Date(m.sent_at).getTime() > Date.now() - 10000 // В последние 10 секунд
+        );
+
+        if (existingIndex !== -1) {
+            // Заменяем временное сообщение на реальное
+            currentMessages[existingIndex] = msg;
+        } else {
+            // Добавляем новое сообщение
+            currentMessages.push(msg);
+        }
+        renderMessages();
+
+        // Обновляем чат локально
+        updateChatLocally(data.chat_id, msg);
+    } else {
+        // Если чат не открыт, увеличиваем счетчик непрочитанных
+        const chat = chatsList.find(c => c.id === data.chat_id);
+        if (chat) {
+            chat.last_msg_time = msg.sent_at;
+            chat.last_msg_text = msg.text || msg.file_name || '';
+            chat.unread_count = (chat.unread_count || 0) + 1;
+
+            // Сортируем и обновляем отображение
+            chatsList.sort((a, b) => {
+                const tA = a.last_msg_time ? new Date(a.last_msg_time).getTime() : 0;
+                const tB = b.last_msg_time ? new Date(b.last_msg_time).getTime() : 0;
+                return tB - tA;
+            });
+            displayChats(chatsList);
+        }
+    }
 }
 
 // Отправка сообщения
@@ -562,72 +723,44 @@ function connectWebSocket() {
     };
 }
 
-// Обработка WebSocket сообщений
-function handleWebSocketMessage(data) {
-    // Унифицируем структуру для файлов и сообщений
-    let msg = {
-        id: data.id,
-        chat_id: data.chat_id,
-        sender_id: data.sender_id,
-        username: data.username,
-        sent_at: data.sent_at,
-        type: data.type === 'new_file' || data.type === 'file' ? 'file' : undefined,
-        text: data.text,
-        file_url: data.file_url,
-        file_name: data.file_name
-    };
-    if (msg.type === 'file' && !msg.file_url && msg.text && msg.text.startsWith('[file]')) {
-        msg.file_url = msg.text.replace('[file]', '');
-    }
-    if (msg.type === 'file' && !msg.file_name) {
-        msg.file_name = 'Файл';
-    }
-    if (!msg.username && currentUser && Number(msg.sender_id) === Number(currentUser.id)) {
-        msg.username = currentUser.username;
-    }
-
-    // Если сообщение для текущего открытого чата
-    if (currentChat && data.chat_id === currentChat.id) {
-        // Проверяем, есть ли временное сообщение с таким же текстом от того же пользователя
-        const existingIndex = currentMessages.findIndex(m =>
-            m.isTemp &&
-            m.sender_id === msg.sender_id &&
-            m.text === msg.text &&
-            new Date(m.sent_at).getTime() > Date.now() - 10000 // В последние 10 секунд
-        );
-
-        if (existingIndex !== -1) {
-            // Заменяем временное сообщение на реальное
-            currentMessages[existingIndex] = msg;
-        } else {
-            // Добавляем новое сообщение
-            currentMessages.push(msg);
-        }
-        renderMessages();
-
-        // Обновляем чат локально
-        updateChatLocally(data.chat_id, msg);
+// Модальное окно подтверждения выхода
+function showLogoutConfirm() {
+    let modal = document.getElementById('logoutConfirmModal');
+    if (modal) {
+        modal.innerHTML = `
+            <div class="modal-content" style="text-align:center; min-width:320px;">
+                <span class="close" id="closeLogoutConfirm">×</span>
+                <h3>Выход из аккаунта</h3>
+                <p>Вы уверены, что хотите выйти?</p>
+                <button id="confirmLogoutBtn" style="background:#ff4444;color:#fff;padding:8px 18px;border:none;border-radius:5px;margin:10px 8px 0 0;">Да, выйти</button>
+                <button id="cancelLogoutBtn" style="background:#eee;color:#222;padding:8px 18px;border:none;border-radius:5px;margin:10px 0 0 0;">Отмена</button>
+            </div>
+        `;
     } else {
-        // Если чат не открыт, увеличиваем счетчик непрочитанных
-        const chat = chatsList.find(c => c.id === data.chat_id);
-        if (chat) {
-            chat.last_msg_time = msg.sent_at;
-            chat.last_msg_text = msg.text || msg.file_name || '';
-            chat.unread_count = (chat.unread_count || 0) + 1;
-
-            // Сортируем и обновляем отображение
-            chatsList.sort((a, b) => {
-                const tA = a.last_msg_time ? new Date(a.last_msg_time).getTime() : 0;
-                const tB = b.last_msg_time ? new Date(b.last_msg_time).getTime() : 0;
-                return tB - tA;
-            });
-            displayChats(chatsList);
-        }
+        modal = document.createElement('div');
+        modal.id = 'logoutConfirmModal';
+        modal.className = 'modal';
+        modal.innerHTML = `
+            <div class="modal-content" style="text-align:center; min-width:320px;">
+                <span class="close" id="closeLogoutConfirm">×</span>
+                <h3>Выход из аккаунта</h3>
+                <p>Вы уверены, что хотите выйти?</p>
+                <button id="confirmLogoutBtn" style="background:#ff4444;color:#fff;padding:8px 18px;border:none;border-radius:5px;margin:10px 8px 0 0;">Да, выйти</button>
+                <button id="cancelLogoutBtn" style="background:#eee;color:#222;padding:8px 18px;border:none;border-radius:5px;margin:10px 0 0 0;">Отмена</button>
+            </div>
+        `;
+        document.body.appendChild(modal);
     }
+    modal.style.display = 'flex';
+    document.getElementById('closeLogoutConfirm').onclick = () => modal.style.display = 'none';
+    document.getElementById('cancelLogoutBtn').onclick = () => modal.style.display = 'none';
+    document.getElementById('confirmLogoutBtn').onclick = () => {
+        modal.style.display = 'none';
+        doLogout();
+    };
 }
 
-// Выход из системы
-function logout() {
+function doLogout() {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     currentUser = null;
@@ -681,7 +814,7 @@ function showNewChatModal() {
     }
 }
 
-// Показать модальное окно профиля
+// Улучшенный профиль
 async function showProfileModal() {
     const profileModal = document.getElementById('profileModal');
     const profileInfo = document.getElementById('profileInfo');
@@ -691,11 +824,17 @@ async function showProfileModal() {
     const profilePassword = document.getElementById('profilePassword');
     const profileMsg = document.getElementById('profileMsg');
     if (currentUser) {
+        // Генерируем "аватар" (инициалы)
+        let initials = (currentUser.username||'')[0] || '?';
+        if (currentUser.nickname) initials = currentUser.nickname[0].toUpperCase();
         profileInfo.innerHTML = `
-            <p><strong>ID:</strong> ${currentUser.id}</p>
-            <p><strong>Имя:</strong> ${currentUser.username}</p>
-            <p><strong>Никнейм:</strong> ${currentUser.nickname || 'Не задан'}</p>
-            <p><strong>Email:</strong> ${currentUser.email}</p>
+            <div class="profile-avatar">${initials}</div>
+            <div class="profile-details">
+                <div style="font-size:1.2em;font-weight:600;">${currentUser.username}</div>
+                <div style="color:#888;">@${currentUser.nickname||'нет_никнейма'}</div>
+                <div style="color:#666;font-size:0.98em;">${currentUser.email}</div>
+                <div style="color:#bbb;font-size:0.9em;">ID: ${currentUser.id}</div>
+            </div>
         `;
         profileUsername.value = currentUser.username;
         profileNickname.value = currentUser.nickname || '';
