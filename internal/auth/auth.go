@@ -134,6 +134,9 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Приведение userID к int для совместимости с базой данных
+	intUserID := int(userID)
+
 	// Генерируем пару ключей для нового пользователя
 	keyPair, err := crypto.GenerateKeyPair()
 	if err != nil {
@@ -142,11 +145,14 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Логируем длину public_key для диагностики
+	// fmt.Printf("public_key length: %d\n", len(keyPair.PublicKey))
+
 	// Сохраняем публичный ключ в базу данных
-	_, err = db.DB.Exec("INSERT INTO user_keys (user_id, public_key) VALUES (?, ?)", userID, keyPair.PublicKey)
+	_, err = db.DB.Exec("INSERT INTO user_keys (user_id, public_key) VALUES (?, ?)", intUserID, keyPair.PublicKey)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(RegisterResponse{Success: false, Error: "Ошибка сохранения ключей"})
+		json.NewEncoder(w).Encode(RegisterResponse{Success: false, Error: "Ошибка сохранения ключей: " + err.Error()})
 		return
 	}
 
