@@ -1,0 +1,123 @@
+/* Простое решение для предотвращения перехвата событий input type="file" */
+
+/* Ограничиваем input file только областью кнопки */
+.file-btn input[type="file"] {
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 32px !important;
+  height: 32px !important;
+  opacity: 0 !important;
+  cursor: pointer !important;
+  z-index: 1 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  background: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  font-size: 0 !important;
+  display: block !important;
+  pointer-events: auto !important;
+}
+
+/* Кнопка файла должна быть ограничена */
+.file-btn {
+  position: relative !important;
+  width: 32px !important;
+  height: 32px !important;
+  overflow: hidden !important;
+  z-index: 1 !important;
+  display: inline-block !important;
+}
+
+/* Обеспечиваем, что чаты работают корректно */
+#chatList li,
+#mobileChatList li {
+  position: relative !important;
+  z-index: 10 !important;
+  pointer-events: auto !important;
+}
+
+/* Форма ввода должна работать */
+.input-container {
+  z-index: 10000 !important;
+  pointer-events: auto !important;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* Анимация для скрытия/показа блока ввода */
+.input-container.hidden {
+  opacity: 0 !important;
+  transform: translateY(100%) !important;
+  pointer-events: none !important;
+}
+
+#msgForm {
+  pointer-events: auto !important;
+}
+
+#msgInput {
+  pointer-events: auto !important;
+}
+
+button[type="submit"] {
+  pointer-events: auto !important;
+}
+
+/* Дополнительная защита для чатов */
+#chatList li:hover,
+#mobileChatList li:hover {
+  z-index: 101 !important;
+}
+
+/* Обеспечиваем, что input file не может выйти за пределы кнопки */
+.file-btn input[type="file"]:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Предотвращаем перетаскивание файлов на другие элементы */
+#chatList,
+#mobileChatList,
+#sidebar,
+#content {
+  -webkit-user-drag: none !important;
+  -khtml-user-drag: none !important;
+  -moz-user-drag: none !important;
+  -o-user-drag: none !important;
+  user-drag: none !important;
+}
+
+/* Дополнительная поддержка для мобильных браузеров */
+@supports (padding: max(0px)) {
+  .mobile-menu-footer {
+    padding-bottom: max(20px, env(safe-area-inset-bottom)) !important;
+  }
+
+  .input-container {
+    padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* Поддержка для старых браузеров без env() */
+@supports not (padding: env(safe-area-inset-bottom)) {
+  .mobile-menu-footer {
+    padding-bottom: 30px !important;
+  }
+
+  .input-container {
+    padding-bottom: 15px !important;
+  }
+}
+
+/* Специальные стили для устройств с большими safe-area */
+@media screen and (max-height: 700px) {
+  .mobile-menu-footer {
+    padding-bottom: 25px !important;
+  }
+
+  .input-container {
+    padding-bottom: 12px !important;
+  }
+}

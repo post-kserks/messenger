@@ -5,6 +5,127 @@ let ws = null;
 let currentMessages = [];
 let chatsList = [];
 
+// Криптографические переменные
+let currentUserKeys = null;
+let chatParticipantsKeys = {};
+
+// Криптографические функции
+// Генерация пары ключей
+async function generateKeyPair() {
+    const keyPair = nacl.box.keyPair();
+    return {
+        publicKey: nacl.util.encodeBase64(keyPair.publicKey),
+        privateKey: nacl.util.encodeBase64(keyPair.secretKey)
+    };
+}
+
+// Шифрование сообщения для конкретного чата
+async function encryptMessageForChat(message, chatId) {
+    const participants = chatParticipantsKeys[chatId];
+    if (!participants || participants.length === 0) {
+        throw new Error('Нет ключей участников чата');
+    }
+
+    const encryptedMessages = [];
+
+    for (const participant of participants) {
+        if (participant.user_id === currentUser.id) continue; // Пропускаем себя
+
+        const publicKey = nacl.util.decodeBase64(participant.public_key);
+        const ephemeralKeyPair = nacl.box.keyPair();
+        const nonce = nacl.randomBytes(24);
+
+        const encrypted = nacl.box(
+            nacl.util.decodeUTF8(message),
+            nonce,
+            publicKey,
+            ephemeralKeyPair.secretKey
+        );
+
+        encryptedMessages.push({
+            user_id: participant.user_id,
+            encrypted_data: nacl.util.encodeBase64(encrypted),
+            nonce: nacl.util.encodeBase64(nonce),
+            ephemeral_public_key: nacl.util.encodeBase64(ephemeralKeyPair.publicKey)
+        });
+    }
+
+    return encryptedMessages;
+}
+
+// Расшифровка сообщения
+async function decryptMessage(encryptedData, nonce, senderPublicKey) {
+    if (!currentUserKeys) {
+        throw new Error('Ключи пользователя не загружены');
+    }
+
+    const privateKey = nacl.util.decodeBase64(currentUserKeys.privateKey);
+    const publicKey = nacl.util.decodeBase64(senderPublicKey);
+    const nonceBytes = nacl.util.decodeBase64(nonce);
+    const encryptedBytes = nacl.util.decodeBase64(encryptedData);
+
+    const decrypted = nacl.box.open(encryptedBytes, nonceBytes, publicKey, privateKey);
+    if (!decrypted) {
+        throw new Error('Не удалось расшифровать сообщение');
+    }
+
+    return nacl.util.encodeUTF8(decrypted);
+}
+
+// Функция получения публичного ключа пользователя
+async function getUserPublicKey(userId) {
+    try {
+        const response = await fetch(`/api/users/${userId}/public-key`, {
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('token')
+            }
+        });
+
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch (error) {
+        console.error('Ошибка получения ключа:', error);
+    }
+    return null;
+}
+
+// Функция загрузки ключей участников чата
+async function loadChatParticipantsKeys(chatId) {
+    try {
+        const response = await fetch(`/api/chats/${chatId}/participants-keys`, {
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('token')
+            }
+        });
+
+        if (response.ok) {
+            const keys = await response.json();
+            chatParticipantsKeys[chatId] = keys;
+        }
+    } catch (error) {
+        console.error('Ошибка загрузки ключей участников:', error);
+    }
+}
+
+// Функция получения статуса шифрования чата
+async function getChatEncryptionStatus(chatId) {
+    try {
+        const response = await fetch(`/api/chats/${chatId}/encryption-status`, {
+            headers: {
+                'Authorization': 'Bearer ' + localStorage.getItem('token')
+            }
+        });
+
+        if (response.ok) {
+            return await response.json();
+        }
+    } catch (error) {
+        console.error('Ошибка получения статуса шифрования:', error);
+    }
+    return null;
+}
+
 // Проверка авторизации при загрузке страницы
 document.addEventListener('DOMContentLoaded', function() {
     const token = localStorage.getItem('token');
@@ -20,10 +141,37 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Инициализация обработчиков событий
     initEventHandlers();
+
+    // Защита: скрыть мобильное меню на десктопе и наоборот
+    function fixMenuDisplay() {
+        const sidebar = document.getElementById('sidebar');
+        const mobileMenu = document.getElementById('mobileMenu');
+        if (window.innerWidth > 768) {
+            if (sidebar) sidebar.style.display = 'flex';
+            if (mobileMenu) mobileMenu.style.display = 'none';
+        } else {
+            if (sidebar) sidebar.style.display = 'none';
+            if (mobileMenu) mobileMenu.style.display = 'block';
+        }
+    }
+    fixMenuDisplay();
+    window.addEventListener('resize', fixMenuDisplay);
 });
 
 // Инициализация обработчиков событий
 function initEventHandlers() {
+    // Простая защита от перехвата событий input file
+    document.addEventListener('click', function(e) {
+        const fileInput = e.target.closest('input[type="file"]');
+        const fileBtn = e.target.closest('.file-btn');
+
+        // Если клик не по кнопке файла, но по input file - блокируем
+        if (fileInput && !fileBtn) {
+            e.stopPropagation();
+            e.preventDefault();
+            return false;
+        }
+    }, true);
     // Обработчик формы логина
     const loginForm = document.getElementById('loginForm');
     if (loginForm) {
@@ -37,14 +185,24 @@ function initEventHandlers() {
     }
 
     // Обработчики для главной страницы
-    const msgForm = document.getElementById('msgForm');
+        const msgForm = document.getElementById('msgForm');
     if (msgForm) {
-        msgForm.addEventListener('submit', sendMessage);
+        msgForm.addEventListener('submit', (e) => {
+            console.log('Отправка формы');
+            sendMessage(e);
+        });
+
+        // Добавляем обработчик для мобильных устройств
+        msgForm.addEventListener('touchstart', (e) => {
+            console.log('Touch по форме');
+            // Предотвращаем двойное срабатывание
+            e.stopPropagation();
+        });
     }
 
-    const fileForm = document.getElementById('fileForm');
-    if (fileForm) {
-        fileForm.addEventListener('submit', sendFile);
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput) {
+        fileInput.addEventListener('change', handleFileSelect);
     }
 
     const createChatBtn = document.getElementById('createChatBtn');
@@ -67,8 +225,13 @@ function initEventHandlers() {
         contactsBtn.addEventListener('click', showContactsModal);
     }
 
+    // Обработчики мобильного меню
+    initMobileMenuHandlers();
+
     // Обработчики модальных окон
     initModalHandlers();
+
+
 }
 
 // Обработка логина
@@ -179,6 +342,31 @@ async function checkAuth() {
         currentUser = user;
         localStorage.setItem('user', JSON.stringify(user));
 
+        // Инициализируем ключи пользователя
+        try {
+            const userKey = await getUserPublicKey(user.id);
+            if (userKey) {
+                // В реальном приложении приватный ключ должен храниться безопасно
+                // Для демонстрации генерируем новую пару ключей
+                const keyPair = await generateKeyPair();
+                currentUserKeys = keyPair;
+
+                // Обновляем публичный ключ на сервере
+                await fetch(`/api/users/${user.id}/public-key`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + token
+                    },
+                    body: JSON.stringify({
+                        public_key: keyPair.publicKey
+                    })
+                });
+            }
+        } catch (error) {
+            console.error('Ошибка инициализации ключей:', error);
+        }
+
         // Если мы на странице логина, перенаправляем на главную
         if (window.location.pathname === '/static/login.html' || window.location.pathname === '/static/register.html') {
             window.location.href = '/';
@@ -188,6 +376,14 @@ async function checkAuth() {
         if (window.location.pathname === '/' || window.location.pathname === '/static/index.html') {
             loadChats();
             connectWebSocket();
+
+            // Показываем форму на мобильных устройствах
+            const msgForm = document.getElementById('msgForm');
+            const inputContainer = document.querySelector('.input-container');
+            if (msgForm && inputContainer && window.innerWidth <= 768) {
+                msgForm.style.display = 'flex';
+                inputContainer.style.display = 'block';
+            }
         }
     } catch (error) {
         console.error('Ошибка проверки авторизации:', error);
@@ -229,26 +425,6 @@ async function loadChats() {
     }
 }
 
-// Отображение чатов
-function displayChats(chats) {
-    const chatList = document.getElementById('chatList');
-    if (!chatList) return;
-    chatList.innerHTML = '';
-    chats.forEach(chat => {
-        const li = document.createElement('li');
-        li.textContent = chat.name;
-        if (chat.unread_count && chat.unread_count > 0) {
-            const badge = document.createElement('span');
-            badge.textContent = ` (${chat.unread_count})`;
-            badge.style.color = '#4f8cff';
-            badge.style.fontWeight = 'bold';
-            li.appendChild(badge);
-        }
-        li.onclick = () => selectChat(chat);
-        chatList.appendChild(li);
-    });
-}
-
 // Выбор чата
 async function selectChat(chat) {
     currentChat = chat;
@@ -259,11 +435,22 @@ async function selectChat(chat) {
     }
     // Показываем форму отправки сообщений
     const msgForm = document.getElementById('msgForm');
-    const fileForm = document.getElementById('fileForm');
-    if (msgForm) msgForm.style.display = 'flex';
-    if (fileForm) fileForm.style.display = 'flex';
+    const inputContainer = document.querySelector('.input-container');
+    if (msgForm) {
+        msgForm.style.display = 'flex';
+        console.log('Форма показана:', msgForm.style.display);
+    }
+    if (inputContainer) {
+        inputContainer.style.display = 'block';
+        console.log('Контейнер показан:', inputContainer.style.display);
+    }
+
+    // Загружаем ключи участников чата для шифрования
+    await loadChatParticipantsKeys(chat.id);
+
     // Загружаем сообщения
     await loadMessages(chat.id);
+
     // Сбрасываем счетчик непрочитанных сообщений
     try {
         await fetch('/api/mark_read', {
@@ -283,10 +470,18 @@ async function selectChat(chat) {
     } catch (error) {
         console.error('Ошибка сброса непрочитанных:', error);
     }
-    // Обновляем активный чат в списке
-    const chatItems = document.querySelectorAll('#chatList li');
+    // Обновляем активный чат в списке (для десктопа и мобильного)
+    const chatItems = document.querySelectorAll('#chatList li, #mobileChatList li');
     chatItems.forEach(item => item.classList.remove('active'));
-    event.target.classList.add('active');
+
+    // Находим и активируем выбранный чат
+    const selectedChatItem = Array.from(chatItems).find(item => {
+        const span = item.querySelector('span');
+        return span && span.textContent === chat.name;
+    });
+    if (selectedChatItem) {
+        selectedChatItem.classList.add('active');
+    }
 }
 
 // Загрузка сообщений
@@ -300,6 +495,29 @@ async function loadMessages(chatId) {
 
         if (response.ok) {
             const messages = await response.json();
+
+            // Обрабатываем зашифрованные сообщения
+            for (const message of messages) {
+                if (message.is_encrypted && message.encrypted_data) {
+                    try {
+                        // Получаем публичный ключ отправителя
+                        const senderKey = await getUserPublicKey(message.sender_id);
+                        if (senderKey) {
+                            message.text = await decryptMessage(
+                                message.encrypted_data,
+                                message.nonce,
+                                senderKey.public_key
+                            );
+                        } else {
+                            message.text = '[Зашифрованное сообщение]';
+                        }
+                    } catch (error) {
+                        console.error('Ошибка расшифровки:', error);
+                        message.text = '[Зашифрованное сообщение]';
+                    }
+                }
+            }
+
             currentMessages = messages;
             renderMessages();
         }
@@ -464,7 +682,7 @@ function sendReaction(messageId, emoji) {
 }
 
 // --- ОБРАБОТКА ВХОДЯЩИХ РЕАКЦИЙ ---
-function handleWebSocketMessage(data) {
+async function handleWebSocketMessage(data) {
     if (data.type === 'reaction' && data.message_id) {
         // Найти сообщение и обновить его реакции
         const msg = currentMessages.find(m => m.id === data.message_id);
@@ -474,6 +692,7 @@ function handleWebSocketMessage(data) {
         }
         return;
     }
+
     // Унифицируем структуру для файлов и сообщений
     let msg = {
         id: data.id,
@@ -485,8 +704,32 @@ function handleWebSocketMessage(data) {
         text: data.text,
         file_url: data.file_url,
         file_name: data.file_name,
-        reactions: data.reactions // <-- добавляем реакции, если есть
+        reactions: data.reactions, // <-- добавляем реакции, если есть
+        is_encrypted: data.is_encrypted || false,
+        encrypted_data: data.encrypted_data,
+        nonce: data.nonce
     };
+
+    // Обрабатываем зашифрованные сообщения
+    if (msg.is_encrypted && msg.encrypted_data && msg.nonce) {
+        try {
+            // Получаем публичный ключ отправителя
+            const senderKey = await getUserPublicKey(msg.sender_id);
+            if (senderKey) {
+                msg.text = await decryptMessage(
+                    msg.encrypted_data,
+                    msg.nonce,
+                    senderKey.public_key
+                );
+            } else {
+                msg.text = '[Зашифрованное сообщение]';
+            }
+        } catch (error) {
+            console.error('Ошибка расшифровки:', error);
+            msg.text = '[Зашифрованное сообщение]';
+        }
+    }
+
     if (msg.type === 'file' && !msg.file_url && msg.text && msg.text.startsWith('[file]')) {
         msg.file_url = msg.text.replace('[file]', '');
     }
@@ -544,47 +787,116 @@ async function sendMessage(e) {
     if (!currentChat) return;
 
     const input = document.getElementById('msgInput');
+    const fileInput = document.getElementById('fileInput');
     const text = input.value.trim();
+    const file = fileInput.files[0];
 
-    if (!text) return;
+    // Если нет ни текста, ни файла - не отправляем
+    if (!text && !file) return;
 
-    // Создаем временное сообщение для мгновенного отображения
-    const tempMessage = {
-        id: 'temp_' + Date.now(), // Временный ID с префиксом
-        chat_id: currentChat.id,
-        sender_id: currentUser.id,
-        username: currentUser.username,
-        text: text,
-        sent_at: new Date().toISOString(),
-        type: 'text',
-        isTemp: true // Флаг временного сообщения
-    };
+    let tempMessage;
 
-    // Очищаем поле ввода и добавляем сообщение локально
-    input.value = '';
-    currentMessages.push(tempMessage);
-    renderMessages();
+    if (file) {
+        // Отправляем файл
+        tempMessage = {
+            id: 'temp_' + Date.now(),
+            chat_id: currentChat.id,
+            sender_id: currentUser.id,
+            username: currentUser.username,
+            text: `[file]${file.name}`,
+            sent_at: new Date().toISOString(),
+            type: 'file',
+            file_name: file.name,
+            isTemp: true
+        };
 
-    // Обновляем чат в списке локально
-    updateChatLocally(currentChat.id, tempMessage);
+        // Очищаем поле ввода и добавляем сообщение локально
+        input.value = '';
+        fileInput.value = '';
+        currentMessages.push(tempMessage);
+        renderMessages();
 
-    // Отправляем сообщение на сервер в фоне
-    sendMessageToServer(currentChat.id, text, tempMessage.id);
+        // Обновляем чат в списке локально
+        updateChatLocally(currentChat.id, tempMessage);
+
+        // Отправляем файл на сервер в фоне
+        sendFileToServer(currentChat.id, file, tempMessage.id);
+    } else {
+        // Отправляем только текст
+        tempMessage = {
+            id: 'temp_' + Date.now(),
+            chat_id: currentChat.id,
+            sender_id: currentUser.id,
+            username: currentUser.username,
+            text: text,
+            sent_at: new Date().toISOString(),
+            type: 'text',
+            isTemp: true
+        };
+
+        // Очищаем поле ввода и добавляем сообщение локально
+        input.value = '';
+        currentMessages.push(tempMessage);
+        renderMessages();
+
+        // Обновляем чат в списке локально
+        updateChatLocally(currentChat.id, tempMessage);
+
+        // Отправляем сообщение на сервер в фоне
+        sendMessageToServer(currentChat.id, text, tempMessage.id);
+    }
+}
+
+// Обработка выбора файла
+function handleFileSelect(e) {
+    const file = e.target.files[0];
+    const input = document.getElementById('msgInput');
+    if (file) {
+        input.value = `📎 ${file.name}`;
+        input.placeholder = 'Добавьте сообщение к файлу (необязательно)';
+        console.log('Файл выбран:', file.name);
+    } else {
+        input.placeholder = 'Введите сообщение';
+    }
 }
 
 // Функция отправки сообщения на сервер
 async function sendMessageToServer(chatId, text, tempId) {
     try {
+        let messageData = {
+            chat_id: chatId,
+            text: text,
+            is_encrypted: false
+        };
+
+        // Проверяем, есть ли ключи участников чата
+        if (chatParticipantsKeys[chatId] && chatParticipantsKeys[chatId].length > 0) {
+            try {
+                // Шифруем сообщение
+                const encryptedMessages = await encryptMessageForChat(text, chatId);
+
+                if (encryptedMessages.length > 0) {
+                    // Отправляем зашифрованное сообщение (берем первый для простоты)
+                    messageData = {
+                        chat_id: chatId,
+                        encrypted_data: encryptedMessages[0].encrypted_data,
+                        nonce: encryptedMessages[0].nonce,
+                        is_encrypted: true
+                    };
+                }
+            } catch (error) {
+                console.error('Ошибка шифрования:', error);
+                // Продолжаем с обычным сообщением
+            }
+        }
+
         const response = await fetch('/api/messages', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + localStorage.getItem('token')
             },
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: text
-            })
+            body: JSON.stringify(messageData)
         });
 
         if (!response.ok) {
@@ -623,42 +935,6 @@ function updateChatLocally(chatId, message) {
 
         displayChats(chatsList);
     }
-}
-
-// Отправка файла
-async function sendFile(e) {
-    e.preventDefault();
-
-    if (!currentChat) return;
-
-    const fileInput = document.getElementById('fileInput');
-    const file = fileInput.files[0];
-
-    if (!file) return;
-
-    // Создаем временное сообщение для мгновенного отображения
-    const tempMessage = {
-        id: 'temp_' + Date.now(),
-        chat_id: currentChat.id,
-        sender_id: currentUser.id,
-        username: currentUser.username,
-        text: `[file]${file.name}`,
-        sent_at: new Date().toISOString(),
-        type: 'file',
-        file_name: file.name,
-        isTemp: true
-    };
-
-    // Очищаем поле ввода и добавляем сообщение локально
-    fileInput.value = '';
-    currentMessages.push(tempMessage);
-    renderMessages();
-
-    // Обновляем чат в списке локально
-    updateChatLocally(currentChat.id, tempMessage);
-
-    // Отправляем файл на сервер в фоне
-    sendFileToServer(currentChat.id, file, tempMessage.id);
 }
 
 // Функция отправки файла на сервер
@@ -1058,5 +1334,168 @@ async function addContactByUsername(username) {
     } catch (error) {
         console.error('Ошибка добавления контакта:', error);
         alert('Ошибка добавления контакта');
+    }
+}
+
+// === МОБИЛЬНОЕ МЕНЮ ===
+
+// Инициализация обработчиков мобильного меню
+function initMobileMenuHandlers() {
+    const burgerMenuBtn = document.getElementById('burgerMenuBtn');
+    const mobileMenu = document.getElementById('mobileMenu');
+    const mobileMenuOverlay = document.getElementById('mobileMenuOverlay');
+    const closeMobileMenu = document.getElementById('closeMobileMenu');
+
+    // Кнопка бургер-меню
+    if (burgerMenuBtn) {
+        burgerMenuBtn.addEventListener('click', openMobileMenu);
+    }
+
+    // Кнопка закрытия
+    if (closeMobileMenu) {
+        closeMobileMenu.addEventListener('click', closeMobileMenuFunc);
+    }
+
+    // Закрытие по клику на оверлей
+    if (mobileMenuOverlay) {
+        mobileMenuOverlay.addEventListener('click', closeMobileMenuFunc);
+    }
+
+    // Закрытие по нажатию Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeMobileMenuFunc();
+        }
+    });
+
+    // Обработчик изменения размера окна
+    window.addEventListener('resize', function() {
+        const inputContainer = document.querySelector('.input-container');
+        const mobileMenu = document.getElementById('mobileMenu');
+
+        // Если меню открыто на мобильном, блок ввода должен быть скрыт
+        if (inputContainer && window.innerWidth <= 768) {
+            if (mobileMenu && mobileMenu.classList.contains('open')) {
+                inputContainer.classList.add('hidden');
+            } else {
+                inputContainer.classList.remove('hidden');
+            }
+        }
+    });
+
+    // Мобильные кнопки
+    const mobileCreateChatBtn = document.getElementById('mobileCreateChatBtn');
+    const mobileContactsBtn = document.getElementById('mobileContactsBtn');
+    const mobileProfileBtn = document.getElementById('mobileProfileBtn');
+    const mobileLogoutBtn = document.getElementById('mobileLogoutBtn');
+
+    if (mobileCreateChatBtn) {
+        mobileCreateChatBtn.addEventListener('click', function() {
+            closeMobileMenuFunc();
+            showNewChatModal();
+        });
+    }
+
+    if (mobileContactsBtn) {
+        mobileContactsBtn.addEventListener('click', function() {
+            closeMobileMenuFunc();
+            showContactsModal();
+        });
+    }
+
+    if (mobileProfileBtn) {
+        mobileProfileBtn.addEventListener('click', function() {
+            closeMobileMenuFunc();
+            showProfileModal();
+        });
+    }
+
+    if (mobileLogoutBtn) {
+        mobileLogoutBtn.addEventListener('click', function() {
+            closeMobileMenuFunc();
+            showLogoutConfirm();
+        });
+    }
+}
+
+// Открытие мобильного меню
+function openMobileMenu() {
+    const mobileMenu = document.getElementById('mobileMenu');
+    const mobileMenuOverlay = document.getElementById('mobileMenuOverlay');
+    const inputContainer = document.querySelector('.input-container');
+    const msgForm = document.getElementById('msgForm');
+
+    if (mobileMenu && mobileMenuOverlay) {
+        mobileMenu.classList.add('open');
+        mobileMenuOverlay.classList.add('open');
+        document.body.style.overflow = 'hidden'; // Блокируем прокрутку
+
+        // Скрываем блок ввода при открытии меню
+        if (inputContainer && window.innerWidth <= 768) {
+            inputContainer.classList.add('hidden');
+        }
+    }
+}
+
+// Закрытие мобильного меню
+function closeMobileMenuFunc() {
+    const mobileMenu = document.getElementById('mobileMenu');
+    const mobileMenuOverlay = document.getElementById('mobileMenuOverlay');
+    const inputContainer = document.querySelector('.input-container');
+    const msgForm = document.getElementById('msgForm');
+
+    if (mobileMenu && mobileMenuOverlay) {
+        mobileMenu.classList.remove('open');
+        mobileMenuOverlay.classList.remove('open');
+        document.body.style.overflow = ''; // Возвращаем прокрутку
+
+        // Показываем блок ввода при закрытии меню (только на мобильных)
+        if (inputContainer && window.innerWidth <= 768) {
+            inputContainer.classList.remove('hidden');
+        }
+    }
+}
+
+// Обновленная функция отображения чатов (для мобильного меню)
+function displayChats(chats) {
+    chatsList = chats;
+
+    // Обновляем основной список чатов
+    const chatList = document.getElementById('chatList');
+    if (chatList) {
+        chatList.innerHTML = '';
+        chats.forEach(chat => {
+            const li = document.createElement('li');
+            li.onclick = () => selectChat(chat);
+            li.innerHTML = `
+                <span>${chat.name}</span>
+                ${chat.unread_count > 0 ? `<span class="unread">${chat.unread_count}</span>` : ''}
+            `;
+            if (currentChat && currentChat.id === chat.id) {
+                li.classList.add('active');
+            }
+            chatList.appendChild(li);
+        });
+    }
+
+    // Обновляем мобильный список чатов
+    const mobileChatList = document.getElementById('mobileChatList');
+    if (mobileChatList) {
+        mobileChatList.innerHTML = '';
+        chats.forEach(chat => {
+            const li = document.createElement('li');
+            li.onclick = () => {
+                selectChat(chat);
+                closeMobileMenuFunc(); // Закрываем меню после выбора чата
+            };
+            li.innerHTML = `
+                <span>${chat.name}</span>
+                ${chat.unread_count > 0 ? `<span class="unread">${chat.unread_count}</span>` : ''}
+            `;
+            if (currentChat && currentChat.id === chat.id) {
+                li.classList.add('active');
+            }
+            mobileChatList.appendChild(li);
+        });
     }
 }

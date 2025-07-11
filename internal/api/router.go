@@ -82,6 +82,21 @@ func Router(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
+	// Новые криптографические endpoints
+	case strings.HasPrefix(r.URL.Path, "/api/users/") && strings.HasSuffix(r.URL.Path, "/public-key"):
+		if r.Method == http.MethodGet {
+			GetUserPublicKeyHandler(w, r)
+		} else if r.Method == http.MethodPut {
+			UpdateUserPublicKeyHandler(w, r)
+		} else {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	case strings.HasPrefix(r.URL.Path, "/api/chats/") && strings.HasSuffix(r.URL.Path, "/participants-keys"):
+		GetChatParticipantsKeysHandler(w, r)
+	case strings.HasPrefix(r.URL.Path, "/api/chats/") && strings.HasSuffix(r.URL.Path, "/encryption-status"):
+		GetChatEncryptionStatusHandler(w, r)
+	case r.URL.Path == "/api/migrate-users":
+		MigrateUsersHandler(w, r)
 	case r.URL.Path == "/":
 		http.ServeFile(w, r, "static/index.html")
 	default:
@@ -104,33 +119,57 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	if chatID == "" {
 		chatID = "1"
 	}
-	rows, err := db.DB.Query("SELECT m.id, m.sender_id, u.username, m.text, m.sent_at FROM messages m JOIN users u ON m.sender_id = u.id WHERE m.chat_id = ? ORDER BY m.sent_at ASC LIMIT 100", chatID)
+
+	// Получаем обычные сообщения
+	rows, err := db.DB.Query(`
+		SELECT m.id, m.sender_id, u.username, m.text, m.encrypted_data, m.nonce, m.is_encrypted, m.sent_at
+		FROM messages m
+		JOIN users u ON m.sender_id = u.id
+		WHERE m.chat_id = ?
+		ORDER BY m.sent_at ASC
+		LIMIT 100
+	`, chatID)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
 	defer rows.Close()
+
 	var msgs []map[string]interface{}
 	for rows.Next() {
 		var id, sender int
-		var username, text, sentAt string
-		if err := rows.Scan(&id, &sender, &username, &text, &sentAt); err == nil {
+		var username, text, encryptedData, nonce, sentAt string
+		var isEncrypted bool
+
+		if err := rows.Scan(&id, &sender, &username, &text, &encryptedData, &nonce, &isEncrypted, &sentAt); err == nil {
 			msg := map[string]interface{}{
-				"id":        id,
-				"sender_id": sender,
-				"username":  username,
-				"text":      text,
-				"sent_at":   sentAt,
+				"id":           id,
+				"sender_id":    sender,
+				"username":     username,
+				"sent_at":      sentAt,
+				"is_encrypted": isEncrypted,
 			}
-			if len(text) > 6 && text[:6] == "[file]" {
-				msg["type"] = "file"
-				msg["file_url"] = text[6:]
-				msg["text"] = ""
+
+			if isEncrypted {
+				// Зашифрованное сообщение
+				msg["encrypted_data"] = encryptedData
+				msg["nonce"] = nonce
+				msg["text"] = "" // Текст будет расшифрован на клиенте
+			} else {
+				// Обычное сообщение
+				msg["text"] = text
+				if len(text) > 6 && text[:6] == "[file]" {
+					msg["type"] = "file"
+					msg["file_url"] = text[6:]
+					msg["text"] = ""
+				}
 			}
+
 			msgs = append(msgs, msg)
 		}
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(msgs)
 }
@@ -138,28 +177,46 @@ func getMessagesHandler(w http.ResponseWriter, r *http.Request) {
 // Создание нового сообщения (POST)
 func createMessageHandler(w http.ResponseWriter, r *http.Request) {
 	type reqT struct {
-		ChatID int    `json:"chat_id"`
-		Text   string `json:"text"`
+		ChatID        int    `json:"chat_id"`
+		Text          string `json:"text"`
+		EncryptedData string `json:"encrypted_data,omitempty"`
+		Nonce         string `json:"nonce,omitempty"`
+		IsEncrypted   bool   `json:"is_encrypted"`
 	}
 	var req reqT
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatID == 0 || req.Text == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatID == 0 {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("Ошибка: Некорректные данные запроса, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
 		return
 	}
 
-	// Валидация длины сообщения
-	if len(req.Text) > 1000 {
+	// Проверяем, что есть либо текст, либо зашифрованные данные
+	if !req.IsEncrypted && req.Text == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Printf("Ошибка: Пустое сообщение, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	if req.IsEncrypted && (req.EncryptedData == "" || req.Nonce == "") {
+		w.WriteHeader(http.StatusBadRequest)
+		log.Printf("Ошибка: Неполные зашифрованные данные, запрос: %s %s", r.Method, r.URL.Path)
+		return
+	}
+
+	// Валидация длины сообщения (только для обычных сообщений)
+	if !req.IsEncrypted && len(req.Text) > 1000 {
 		w.WriteHeader(http.StatusBadRequest)
 		log.Printf("Ошибка: Сообщение слишком длинное, запрос: %s %s", r.Method, r.URL.Path)
 		return
 	}
 
-	// Базовая фильтрация HTML-тегов (защита от XSS)
-	req.Text = strings.ReplaceAll(req.Text, "<", "&lt;")
-	req.Text = strings.ReplaceAll(req.Text, ">", "&gt;")
-	req.Text = strings.ReplaceAll(req.Text, "\"", "&quot;")
-	req.Text = strings.ReplaceAll(req.Text, "'", "&#39;")
+	// Базовая фильтрация HTML-тегов (только для обычных сообщений)
+	if !req.IsEncrypted && req.Text != "" {
+		req.Text = strings.ReplaceAll(req.Text, "<", "&lt;")
+		req.Text = strings.ReplaceAll(req.Text, ">", "&gt;")
+		req.Text = strings.ReplaceAll(req.Text, "\"", "&quot;")
+		req.Text = strings.ReplaceAll(req.Text, "'", "&#39;")
+	}
 
 	// Получаем sender_id из токена авторизации
 	authHeader := r.Header.Get("Authorization")
@@ -196,44 +253,77 @@ func createMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Создаем сообщение
-	res, err := db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, sent_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)", req.ChatID, senderID, req.Text)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
-		return
-	}
-
-	messageID, _ := res.LastInsertId()
+	var messageID int64
+	var username string
 
 	// Получаем username отправителя
-	var username string
 	err = db.DB.QueryRow("SELECT username FROM users WHERE id = ?", senderID).Scan(&username)
 	if err != nil {
 		log.Printf("Ошибка получения username: %v", err)
 		username = "Unknown"
 	}
 
-	// Отправляем уведомление через WebSocket
-	wsMessage := map[string]interface{}{
-		"type":      "new_message",
-		"id":        messageID,
-		"chat_id":   req.ChatID,
-		"sender_id": senderID,
-		"username":  username,
-		"text":      req.Text,
-		"sent_at":   time.Now().UTC().Format(time.RFC3339),
-	}
+	if req.IsEncrypted {
+		// Сохраняем зашифрованное сообщение
+		res, err := db.DB.Exec(
+			"INSERT INTO messages (chat_id, sender_id, encrypted_data, nonce, is_encrypted, sent_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+			req.ChatID, senderID, req.EncryptedData, req.Nonce, true,
+		)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Printf("Ошибка: Не удалось сохранить зашифрованное сообщение, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
+			return
+		}
+		messageID, _ = res.LastInsertId()
 
-	wsMessageBytes, _ := json.Marshal(wsMessage)
-	ws.SendToChatMembers(req.ChatID, wsMessageBytes)
+		// Отправляем уведомление через WebSocket
+		wsMessage := map[string]interface{}{
+			"type":           "new_message",
+			"id":             messageID,
+			"chat_id":        req.ChatID,
+			"sender_id":      senderID,
+			"username":       username,
+			"encrypted_data": req.EncryptedData,
+			"nonce":          req.Nonce,
+			"is_encrypted":   true,
+			"sent_at":        time.Now().UTC().Format(time.RFC3339),
+		}
+
+		wsMessageBytes, _ := json.Marshal(wsMessage)
+		ws.SendToChatMembers(req.ChatID, wsMessageBytes)
+	} else {
+		// Создаем обычное сообщение
+		res, err := db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, is_encrypted, sent_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)", req.ChatID, senderID, req.Text, false)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Printf("Ошибка: Не удалось выполнить запрос к базе данных, запрос: %s %s, ошибка: %v", r.Method, r.URL.Path, err)
+			return
+		}
+
+		messageID, _ = res.LastInsertId()
+
+		// Отправляем уведомление через WebSocket
+		wsMessage := map[string]interface{}{
+			"type":         "new_message",
+			"id":           messageID,
+			"chat_id":      req.ChatID,
+			"sender_id":    senderID,
+			"username":     username,
+			"text":         req.Text,
+			"is_encrypted": false,
+			"sent_at":      time.Now().UTC().Format(time.RFC3339),
+		}
+
+		wsMessageBytes, _ := json.Marshal(wsMessage)
+		ws.SendToChatMembers(req.ChatID, wsMessageBytes)
+	}
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"id":        messageID,
-		"chat_id":   req.ChatID,
-		"sender_id": senderID,
-		"text":      req.Text,
+		"id":           messageID,
+		"chat_id":      req.ChatID,
+		"sender_id":    senderID,
+		"is_encrypted": req.IsEncrypted,
 	})
 }
 

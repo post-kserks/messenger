@@ -24,27 +24,33 @@ var upgrader = websocket.Upgrader{
 var Clients = make(map[int]*websocket.Conn)
 
 type WSIncoming struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ChatID    int    `json:"chat_id"`
-	FileURL   string `json:"file_url,omitempty"`
-	FileName  string `json:"file_name,omitempty"`
-	MessageID int    `json:"message_id,omitempty"`
-	Emoji     string `json:"emoji,omitempty"`
+	Type          string `json:"type"`
+	Text          string `json:"text,omitempty"`
+	EncryptedData string `json:"encrypted_data,omitempty"`
+	Nonce         string `json:"nonce,omitempty"`
+	IsEncrypted   bool   `json:"is_encrypted"`
+	ChatID        int    `json:"chat_id"`
+	FileURL       string `json:"file_url,omitempty"`
+	FileName      string `json:"file_name,omitempty"`
+	MessageID     int    `json:"message_id,omitempty"`
+	Emoji         string `json:"emoji,omitempty"`
 }
 
 type WSOutgoing struct {
-	Type      string                   `json:"type"`
-	SenderID  int                      `json:"sender_id"`
-	Username  string                   `json:"username,omitempty"`
-	Text      string                   `json:"text,omitempty"`
-	SentAt    string                   `json:"sent_at"`
-	ChatID    int                      `json:"chat_id"`
-	FileURL   string                   `json:"file_url,omitempty"`
-	FileName  string                   `json:"file_name,omitempty"`
-	MessageID int                      `json:"message_id,omitempty"`
-	Emoji     string                   `json:"emoji,omitempty"`
-	Reactions []map[string]interface{} `json:"reactions,omitempty"`
+	Type          string                   `json:"type"`
+	SenderID      int                      `json:"sender_id"`
+	Username      string                   `json:"username,omitempty"`
+	Text          string                   `json:"text,omitempty"`
+	EncryptedData string                   `json:"encrypted_data,omitempty"`
+	Nonce         string                   `json:"nonce,omitempty"`
+	IsEncrypted   bool                     `json:"is_encrypted"`
+	SentAt        string                   `json:"sent_at"`
+	ChatID        int                      `json:"chat_id"`
+	FileURL       string                   `json:"file_url,omitempty"`
+	FileName      string                   `json:"file_name,omitempty"`
+	MessageID     int                      `json:"message_id,omitempty"`
+	Emoji         string                   `json:"emoji,omitempty"`
+	Reactions     []map[string]interface{} `json:"reactions,omitempty"`
 }
 
 func HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -91,12 +97,22 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Валидация входных данных
-		if in.Type == "message" && (len(in.Text) == 0 || len(in.Text) > 1000) {
-			continue
+		if in.Type == "message" {
+			if in.IsEncrypted {
+				// Для зашифрованных сообщений проверяем наличие данных
+				if in.EncryptedData == "" || in.Nonce == "" {
+					continue
+				}
+			} else {
+				// Для обычных сообщений проверяем текст
+				if len(in.Text) == 0 || len(in.Text) > 1000 {
+					continue
+				}
+			}
 		}
 
-		// Базовая фильтрация HTML-тегов для защиты от XSS
-		if in.Text != "" {
+		// Базовая фильтрация HTML-тегов для защиты от XSS (только для обычных сообщений)
+		if !in.IsEncrypted && in.Text != "" {
 			in.Text = strings.ReplaceAll(in.Text, "<", "&lt;")
 			in.Text = strings.ReplaceAll(in.Text, ">", "&gt;")
 			in.Text = strings.ReplaceAll(in.Text, "\"", "&quot;")
@@ -106,24 +122,27 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 		sentAt := time.Now().UTC().Format(time.RFC3339)
 		var username string
 		_ = db.DB.QueryRow("SELECT username FROM users WHERE id = ?", int(userID)).Scan(&username)
+
 		if in.Type == "file" && in.FileURL != "" {
-			_, err = db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, sent_at) VALUES (?, ?, ?, ?)", in.ChatID, int(userID), "[file]"+in.FileURL, sentAt)
+			_, err = db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, is_encrypted, sent_at) VALUES (?, ?, ?, ?, ?)", in.ChatID, int(userID), "[file]"+in.FileURL, false, sentAt)
 			if err != nil {
 				log.Println("Ошибка сохранения file-сообщения:", err)
 			}
 			out := WSOutgoing{
-				Type:     "file",
-				SenderID: int(userID),
-				Username: username,
-				FileURL:  in.FileURL,
-				FileName: in.FileName,
-				SentAt:   sentAt,
-				ChatID:   in.ChatID,
+				Type:        "file",
+				SenderID:    int(userID),
+				Username:    username,
+				FileURL:     in.FileURL,
+				FileName:    in.FileName,
+				SentAt:      sentAt,
+				ChatID:      in.ChatID,
+				IsEncrypted: false,
 			}
 			outMsg, _ := json.Marshal(out)
 			SendToChatMembers(in.ChatID, outMsg)
 			continue
 		}
+
 		if in.Type == "reaction" && in.MessageID > 0 {
 			if in.Emoji == "" {
 				// Удаляем реакцию
@@ -161,23 +180,52 @@ func HandleWS(w http.ResponseWriter, r *http.Request) {
 			SendToChatMembers(in.ChatID, outMsg)
 			continue
 		}
+
 		if in.Type != "message" {
 			continue
 		}
-		_, err = db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, sent_at) VALUES (?, ?, ?, ?)", in.ChatID, int(userID), in.Text, sentAt)
-		if err != nil {
-			log.Println("Ошибка сохранения сообщения:", err)
+
+		// Сохраняем сообщение в базу данных
+		if in.IsEncrypted {
+			// Зашифрованное сообщение
+			_, err = db.DB.Exec("INSERT INTO messages (chat_id, sender_id, encrypted_data, nonce, is_encrypted, sent_at) VALUES (?, ?, ?, ?, ?, ?)",
+				in.ChatID, int(userID), in.EncryptedData, in.Nonce, true, sentAt)
+			if err != nil {
+				log.Println("Ошибка сохранения зашифрованного сообщения:", err)
+			}
+
+			out := WSOutgoing{
+				Type:          "message",
+				SenderID:      int(userID),
+				Username:      username,
+				EncryptedData: in.EncryptedData,
+				Nonce:         in.Nonce,
+				IsEncrypted:   true,
+				SentAt:        sentAt,
+				ChatID:        in.ChatID,
+			}
+			outMsg, _ := json.Marshal(out)
+			SendToChatMembers(in.ChatID, outMsg)
+		} else {
+			// Обычное сообщение
+			_, err = db.DB.Exec("INSERT INTO messages (chat_id, sender_id, text, is_encrypted, sent_at) VALUES (?, ?, ?, ?, ?)",
+				in.ChatID, int(userID), in.Text, false, sentAt)
+			if err != nil {
+				log.Println("Ошибка сохранения сообщения:", err)
+			}
+
+			out := WSOutgoing{
+				Type:        "message",
+				SenderID:    int(userID),
+				Username:    username,
+				Text:        in.Text,
+				IsEncrypted: false,
+				SentAt:      sentAt,
+				ChatID:      in.ChatID,
+			}
+			outMsg, _ := json.Marshal(out)
+			SendToChatMembers(in.ChatID, outMsg)
 		}
-		out := WSOutgoing{
-			Type:     "message",
-			SenderID: int(userID),
-			Username: username,
-			Text:     in.Text,
-			SentAt:   sentAt,
-			ChatID:   in.ChatID,
-		}
-		outMsg, _ := json.Marshal(out)
-		SendToChatMembers(in.ChatID, outMsg)
 	}
 }
 

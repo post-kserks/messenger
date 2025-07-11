@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Тест шифрования</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tweetnacl/1.0.3/nacl-fast.min.js"></script>
+</head>
+<body>
+    <h1>Тест шифрования сообщений</h1>
+    <div id="test-results"></div>
+
+    <script>
+        const resultsDiv = document.getElementById('test-results');
+
+        function log(message) {
+            resultsDiv.innerHTML += '<p>' + message + '</p>';
+            console.log(message);
+        }
+
+        // Тест генерации ключей
+        function testKeyGeneration() {
+            log('🔑 Тестируем генерацию ключей...');
+            const keyPair = nacl.box.keyPair();
+            const publicKey = nacl.util.encodeBase64(keyPair.publicKey);
+            const privateKey = nacl.util.encodeBase64(keyPair.secretKey);
+
+            log('✅ Публичный ключ: ' + publicKey.substring(0, 20) + '...');
+            log('✅ Приватный ключ: ' + privateKey.substring(0, 20) + '...');
+
+            return { keyPair, publicKey, privateKey };
+        }
+
+        // Тест шифрования и расшифровки
+        function testEncryptionDecryption() {
+            log('🔐 Тестируем шифрование и расшифровку...');
+
+            const alice = nacl.box.keyPair();
+            const bob = nacl.box.keyPair();
+
+            const message = 'Привет, это тестовое сообщение! 🔐';
+            log('📝 Исходное сообщение: ' + message);
+
+            // Алиса шифрует сообщение для Боба
+            const ephemeralKeyPair = nacl.box.keyPair();
+            const nonce = nacl.randomBytes(24);
+
+            const encrypted = nacl.box(
+                nacl.util.decodeUTF8(message),
+                nonce,
+                bob.publicKey,
+                ephemeralKeyPair.secretKey
+            );
+
+            log('🔒 Зашифрованные данные: ' + nacl.util.encodeBase64(encrypted).substring(0, 30) + '...');
+
+            // Боб расшифровывает сообщение
+            const decrypted = nacl.box.open(encrypted, nonce, ephemeralKeyPair.publicKey, bob.secretKey);
+
+            if (decrypted) {
+                const decryptedMessage = nacl.util.encodeUTF8(decrypted);
+                log('🔓 Расшифрованное сообщение: ' + decryptedMessage);
+
+                if (decryptedMessage === message) {
+                    log('✅ Шифрование работает корректно!');
+                } else {
+                    log('❌ Ошибка: сообщения не совпадают');
+                }
+            } else {
+                log('❌ Ошибка расшифровки');
+            }
+        }
+
+        // Тест с неправильным ключом
+        function testWrongKey() {
+            log('🚫 Тестируем расшифровку с неправильным ключом...');
+
+            const alice = nacl.box.keyPair();
+            const bob = nacl.box.keyPair();
+            const eve = nacl.box.keyPair(); // Ева пытается подслушать
+
+            const message = 'Секретное сообщение';
+
+            // Алиса шифрует для Боба
+            const ephemeralKeyPair = nacl.box.keyPair();
+            const nonce = nacl.randomBytes(24);
+
+            const encrypted = nacl.box(
+                nacl.util.decodeUTF8(message),
+                nonce,
+                bob.publicKey,
+                ephemeralKeyPair.secretKey
+            );
+
+            // Ева пытается расшифровать
+            const decrypted = nacl.box.open(encrypted, nonce, ephemeralKeyPair.publicKey, eve.secretKey);
+
+            if (!decrypted) {
+                log('✅ Безопасность: Ева не смогла расшифровать сообщение');
+            } else {
+                log('❌ Ошибка безопасности: Ева смогла расшифровать сообщение');
+            }
+        }
+
+        // Запуск всех тестов
+        function runAllTests() {
+            log('🚀 Запускаем тесты шифрования...');
+            log('');
+
+            testKeyGeneration();
+            log('');
+
+            testEncryptionDecryption();
+            log('');
+
+            testWrongKey();
+            log('');
+
+            log('🎉 Все тесты завершены!');
+        }
+
+        // Запускаем тесты при загрузке страницы
+        window.addEventListener('load', runAllTests);
+    </script>
+</body>
+</html>

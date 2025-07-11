@@ -1,5 +1,5 @@
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     username TEXT NOT NULL,
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL
@@ -12,9 +12,9 @@ CREATE TABLE contacts (
 );
 
 CREATE TABLE chats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name TEXT,
-    is_group BOOLEAN DEFAULT 0
+    is_group BOOLEAN DEFAULT FALSE
 );
 
 CREATE TABLE chat_members (
@@ -24,7 +24,7 @@ CREATE TABLE chat_members (
 );
 
 CREATE TABLE messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     chat_id INTEGER,
     sender_id INTEGER,
     text TEXT,

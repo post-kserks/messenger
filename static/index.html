@@ -3,11 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <title>Биба</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/fix-file-input.css">
 </head>
 <body>
   <div id="main">
+    <!-- Бургер-меню для мобильных -->
+    <div id="mobileMenu" class="mobile-menu">
+      <div class="mobile-menu-header">
+        <div class="logo">
+          <div class="logo-icon">💬</div>
+          <div class="logo-text">Биба</div>
+        </div>
+        <button id="closeMobileMenu" class="close-mobile-menu">×</button>
+      </div>
+      <div class="mobile-menu-content">
+        <h2>Чаты</h2>
+        <button id="mobileCreateChatBtn">+ Создать чат</button>
+        <ul id="mobileChatList"></ul>
+      </div>
+      <div class="mobile-menu-footer">
+        <button id="mobileContactsBtn">Контакты</button>
+        <button id="mobileProfileBtn">Профиль</button>
+        <button id="mobileLogoutBtn">Выйти</button>
+      </div>
+    </div>
+
+    <!-- Оверлей для мобильного меню -->
+    <div id="mobileMenuOverlay" class="mobile-menu-overlay"></div>
+
+    <!-- Бургер-кнопка -->
+    <button id="burgerMenuBtn" class="burger-menu-btn">☰</button>
+
     <div id="sidebar">
       <div class="logo">
         <div class="logo-icon">💬</div>
@@ -25,14 +57,16 @@
     <div id="content">
       <div id="chatHeader"><span id="chatTitle">Выберите чат</span></div>
       <div id="messages"></div>
-      <form id="msgForm" style="display:none;">
-        <input type="text" id="msgInput" placeholder="Введите сообщение" autocomplete="off" required>
-        <button type="submit">Отправить</button>
-      </form>
-      <form id="fileForm" enctype="multipart/form-data" style="display:none;">
-        <input type="file" id="fileInput">
-        <button type="submit">Отправить файл</button>
-      </form>
+      <div class="input-container">
+        <form id="msgForm" style="display:flex;" enctype="multipart/form-data">
+          <label class="file-btn" title="Прикрепить файл">
+            📎
+            <input type="file" id="fileInput" accept="*/*">
+          </label>
+          <input type="text" id="msgInput" placeholder="Введите сообщение" autocomplete="off">
+          <button type="submit">Отправить</button>
+        </form>
+      </div>
     </div>
   </div>
 
@@ -102,6 +136,8 @@
   <!-- Модальное окно подтверждения выхода -->
   <div class="modal" id="logoutConfirmModal" style="display:none;"></div>
 
+  <!-- Криптографическая библиотека -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tweetnacl/1.0.3/nacl-fast.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

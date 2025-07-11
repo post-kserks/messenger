@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"messenger/internal/crypto"
 	"messenger/internal/db"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -130,6 +131,22 @@ func RegisterHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(RegisterResponse{Success: false, Error: "Ошибка получения ID пользователя"})
+		return
+	}
+
+	// Генерируем пару ключей для нового пользователя
+	keyPair, err := crypto.GenerateKeyPair()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(RegisterResponse{Success: false, Error: "Ошибка генерации ключей"})
+		return
+	}
+
+	// Сохраняем публичный ключ в базу данных
+	_, err = db.DB.Exec("INSERT INTO user_keys (user_id, public_key) VALUES (?, ?)", userID, keyPair.PublicKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(RegisterResponse{Success: false, Error: "Ошибка сохранения ключей"})
 		return
 	}
 
